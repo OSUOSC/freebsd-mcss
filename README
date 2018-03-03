@@ -1,0 +1,12 @@
+# TODO: This should detail how to install software.
+
+Run the install.sh script from this directory to install the MCSS software:
+
+sudo ./install.sh
+
+This installs in /root/mcss.  The MCSS software can be removed with:
+
+sudo /root/mcss/uninstall.sh
+
+Keep in mind the MCSS software is required in order to remain connected to
+the CSE network.  Report any errors to CSE computing staff.

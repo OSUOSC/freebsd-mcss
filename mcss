@@ -1,0 +1,652 @@
+#!/bin/bash
+
+# MCSS Fedora Version 1.1
+
+#####
+#
+# This script checks for MCSS compliance on Fedora systems.  This was created
+# by CSE staff and running it unmodified is required in order to access the
+# CSE network.
+#
+#####
+
+# Set ROOT to the MCSS software installation path.
+ROOT=/root/mcss
+
+# Set SERVER to 1 if this is running on a server.  If running on a server,
+# the following actions are not executed automatically:
+#
+# - The notify() function does not run.
+# - The system won't be shutdown for a failure for any reason.
+#
+# It is expected that servers will be monitored more closely or they will
+# not be in a position where non-staff administrators can configure them
+# in a way that will result in an MCSS compliance failure.
+SERVER=0
+
+# Set DAYS to the number of days a failure can exist.  If a failure exists
+# for more than DAYS days in a row, the system will shutdown on each
+# invocation of this script.
+DAYS=7
+
+# The location of the log file.
+LOG=/var/log/mcss.log
+
+#####
+#
+# Shell functions.
+#
+# For check functions returning 0 means a check passed, returning 1 means a
+# check failed, and returning 2 means a recovery action was taken for a check
+# and the check should be called again for status.  Recovery action functions
+# use their own check to see if they've been called once already.  If they
+# have, they return 1, otherwise they return 0.  This keeps the code from
+# looping over and over in the event a recovery action function doesn't
+# actually work.  In addition, a recovery action can return 1 if the action
+# they try actually fails, which should logically result in the same thing
+# as the recovery action being run more than once.  In general, the check
+# functions should do the recoverable checks first, then the checks that
+# could simply result in returning 1 last.
+#
+#####
+
+# TODO: <firewall> Set up default rules
+firewall_default() {
+    # These are default firewall rules to load in the event the firewall
+    # rules are missing when the check is done.  This way we can avoid
+    # depending on a specific firewall package init.d script being loaded
+    # or a totally open firewall rules definition for such a package.  There
+    # needs to be some firewall rules enabled.  These are fallback defaults.
+    if [ -z "$FIREWALL_DEFAULT" ]; then
+        FIREWALL_DEFAULT=1
+        /sbin/iptables -F
+        /sbin/iptables -X
+        /sbin/iptables -Z
+        /sbin/iptables -P INPUT ACCEPT
+        /sbin/iptables -P FORWARD ACCEPT
+        /sbin/iptables -P OUTPUT ACCEPT
+        /sbin/iptables -N Firewall-1-INPUT
+        /sbin/iptables -A INPUT -j Firewall-1-INPUT
+        /sbin/iptables -A FORWARD -j Firewall-1-INPUT
+        /sbin/iptables -A Firewall-1-INPUT -i lo -j ACCEPT
+        /sbin/iptables -A Firewall-1-INPUT -p icmp --icmp-type any -j ACCEPT
+        /sbin/iptables -A Firewall-1-INPUT -p tcp --dport 22 -j ACCEPT
+        /sbin/iptables -A Firewall-1-INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+        /sbin/iptables -A Firewall-1-INPUT -j REJECT --reject-with icmp-host-prohibited
+        return 0
+    else
+        echo "Firewall: firewall_default was already tried." >>$LOG
+        return 1
+    fi
+}
+
+# TODO: <firewall> Check for firewall enabled and configured correctly
+check_firewall() {
+    local count=`/sbin/iptables -L -n |egrep -v '^Chain|^target|$^' |wc -l`
+
+    if [ $count -eq 0 ]; then
+        echo "Firewall: There are no iptables rules defined." >>$LOG
+        echo "Firewall: Running firewall_default fix." >>$LOG
+        firewall_default
+
+        if [ $? -eq 0 ]; then
+            return 2
+        else
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
+# TODO: <pkg> Check for updates. We don't want to force an update if the return
+# is prompting for a major upgrade, but individual packages _should_ be
+# upgraded ASAP
+check_software() {
+    yum check-update &>/tmp/check-update.$$
+    local ret=$?
+    local num=`egrep 'updates|fedora' /tmp/check-update.$$ |wc -l`
+    rm -f /tmp/check-update.$$
+
+    if [ $ret -eq 100 ]; then
+        echo "Software: Software is not up-to-date:" >>$LOG
+        echo "Software: Number of update packages: $num" >>$LOG
+        return 1
+    fi
+
+    return 0
+}
+
+malware_schedule() {
+    # Add the anti-malware script into root's crontab.
+    if [ -z "$MALWARE_SCHEDULE" ]; then
+        MALWARE_SCHEDULE=1
+        crontab -u root -l >/tmp/malware-cron.$$
+        echo "30 04 * * *               $ROOT/anti-malware" >>/tmp/malware-cron.$$
+        crontab -u root /tmp/malware-cron.$$
+        rm -f /tmp/malware-cron.$$
+        return 0
+    else
+        echo "Malware: malware_schedule was already tried." >>$LOG
+        return 1
+    fi
+}
+
+# TODO: Adjust $MAILTO line
+malware_updates() {
+    # Make sure freshclam updates are enabled.
+    if [ -z "$MALWARE_UPDATES" ]; then
+        MALWARE_UPDATES=1
+        cat <<EOF >/etc/cron.d/clamav-update
+## Adjust this line...
+MAILTO=root,postmaster,webmaster,clamav
+
+## It is ok to execute it as root; freshclam drops privileges and becomes
+## user 'clamav' as soon as possible
+0  */3 * * * root /usr/share/clamav/freshclam-sleep
+EOF
+
+        chmod 600 /etc/cron.d/clamav-update
+        return 0
+    else
+        echo "Malware: malware_updates was already tried." >>$LOG
+        return 1
+    fi
+}
+
+check_malware() {
+    # Check to make sure the anti-malware script is in root's crontab.
+    if ! crontab -u root -l 2>/dev/null |grep -v '#' |grep anti-malware &>/dev/null; then
+        echo "Malware: The anti-malware cron job is not scheduled." >>$LOG
+        echo "Malware: Running malware_schedule fix." >>$LOG
+        malware_schedule
+
+        if [ $? -eq 0 ]; then
+            return 2
+        else
+            return 1
+        fi
+    fi
+
+    # Check that automatic updates are enabled.
+    if [ ! -f /etc/cron.d/clamav-update ] || ! egrep '^0  \*/3 \* \* \* root /usr/share/clamav/freshclam-sleep$' /etc/cron.d/clamav-update &>/dev/null; then
+        echo "Malware: Freshclam updates not enabled or misconfigured." >>$LOG
+        echo "Malware: Running malware_updates fix." >>$LOG
+        malware_updates
+
+        if [ $? -eq 0 ]; then
+            return 2
+        else
+            return 1
+        fi
+    fi
+
+    # TODO: <clamav> Change rpm to pkg
+    for p in clamav clamav-update; do
+        rpm -q $p &>/dev/null
+
+        if [ $? -ne 0 ]; then
+            echo "Malware: ClamAV package $p not installed." >>$LOG
+            return 1
+        fi
+    done
+
+    return 0
+}
+
+# TODO: <users> disable password-less root login
+authentication_gdm() {
+    # Fix the gdm login configuration file so that it won't automatically login
+    # a user.
+    if [ -z "$AUTHENTICATION_GDM" ]; then
+        AUTHENTICATION_GDM=1
+        egrep -v '^AutomaticLoginEnable=true' /etc/gdm/custom.conf >/etc/gdm/custom.conf.$$
+        mv /etc/gdm/custom.conf.$$ /etc/gdm/custom.conf
+        chmod 644 /etc/gdm/custom.conf
+        return 0
+    else
+        echo "Authentication: authentication_gdm was already tried." >>$LOG
+        return 1
+    fi
+}
+
+authentication_pam_conf() {
+    # There should be no /etc/pam.conf file on Fedora systems.
+    if [ -z "$AUTHENTICATION_PAM_CONF" ];then
+        AUTHENTICATION_PAM_CONF=1
+        rm -f /etc/pam.conf
+        return 0
+    else
+        echo "Authentication: authentication_pam_conf was already tried." >>$LOG
+        return 1
+    fi
+}
+
+# TODO: <pam> Make sure this doesn't fuck things up
+authentication_pam_d_passwd() {
+    # Set /etc/pam.d/passwd to its default secure settings.
+    if [ -z "$AUTHENTICATION_PAM_D_PASSWD" ]; then
+        AUTHENTICATION_PAM_D_PASSWD=1
+        cat <<EOF >/etc/pam.d/passwd
+#%PAM-1.0
+auth       include      system-auth
+account    include      system-auth
+password   include      system-auth
+EOF
+
+        chmod 644 /etc/pam.d/passwd
+        return 0
+    else
+        echo "Authentication: authentication_pam_d_passwd was already tried." >>$LOG
+        return 1
+    fi
+}
+
+# TODO: <pam> Make sure this doesn't fuck things up
+authentication_pam_d_system_auth_ac() {
+    # Set /etc/pam.d/system-auth-ac to its default secure settings.
+    if [ -z "$AUTHENTICATION_PAM_D_SYSTEM_AUTH_AC" ]; then
+        AUTHENTICATION_PAM_D_SYSTEM_AUTH_AC=1
+        cat <<EOF >/etc/pam.d/system-auth-ac
+#%PAM-1.0
+# This file is auto-generated.
+# User changes will be destroyed the next time authconfig is run.
+auth        required      pam_env.so
+auth        sufficient    pam_unix.so nullok try_first_pass
+auth        requisite     pam_succeed_if.so uid >= 500 quiet
+auth        required      pam_deny.so
+
+account     required      pam_unix.so
+account     sufficient    pam_localuser.so
+account     sufficient    pam_succeed_if.so uid < 500 quiet
+account     required      pam_permit.so
+
+password    requisite     pam_cracklib.so try_first_pass retry=3 minlen=6 difok=3
+password    sufficient    pam_unix.so md5 shadow nullok try_first_pass use_authtok remember=3
+password    required      pam_deny.so
+
+session     optional      pam_keyinit.so revoke
+session     required      pam_limits.so
+session     [success=1 default=ignore] pam_succeed_if.so service in crond quiet use_uid
+session     required      pam_unix.so
+EOF
+
+        chmod 644 /etc/pam.d/system-auth-ac
+        return 0
+    else
+        echo "Authentication: authentication_pam_d_system_auth_ac was already tried." >>$LOG
+        return 1
+    fi
+}
+
+authentication_passwd() {
+    # Fix any unencrypted /etc/passwd account settings.  This handles NIS
+    # compat settings.
+    if [ -z "$AUTHENTICATION_PASSWD" ]; then
+        AUTHENTICATION_PASSWD=1
+        sed -i 's/^\([a-zA-Z0-9]\{1,\}[-a-zA-Z0-9]\{1,\}\)::/\1:x:/' /etc/passwd 2>/dev/null
+
+        if [ $? -eq 0 ]; then
+            return 0
+        else
+            echo "Authentication: authentication_passwd failed." >>$LOG
+            return 1
+        fi
+    else
+        echo "Authentication: authentication_passwd was already tried." >>$LOG
+        return 1
+    fi
+}
+
+authentication_shadow() {
+    # Fix any unencrypted /etc/shadow account settings.  Here I am choosing
+    # the '!!' value.  If this breaks something, then don't mess with
+    # /etc/shadow by hand.  This handles NIS compat settings.
+    if [ -z "$AUTHENTICATION_SHADOW" ]; then
+        AUTHENTICATION_SHADOW=1
+        sed -i 's/^\([a-zA-Z0-9]\{1,\}[-a-zA-Z0-9]\{1,\}\)::/\1:!!:/' /etc/shadow 2>/dev/null
+
+        if [ $? -eq 0 ]; then
+            return 0
+        else
+            echo "Authentication: authentication_shadow failed." >>$LOG
+            return 1
+        fi
+    else
+        echo "Authentication: authentication_shadow was already tried." >>$LOG
+        return 1
+    fi
+}
+
+# TODO: <pam> Auth for BSD. Including LDAP/other auth systems might break this.
+check_authentication() {
+    # This is the most complicated check overall, but proper authentication
+    # controls should be enabled by default unless someone has been messing
+    # with the system to try and get around it.
+
+    # TODO: <pam> GDM does not exist on BSD - but this will not be run if
+    # `/etc/gdm/custom.conf` does not exist
+    # Make sure the login screen is not configured to automatically login
+    # any user.
+    if egrep '^AutomaticLoginEnable=true' /etc/gdm/custom.conf &>/dev/null; then
+        echo "Authentication: Found gdm automatic login setting." >>$LOG
+        echo "Authentication: Running authentication_gdm fix." >>$LOG
+        authentication_gdm
+
+        if [ $? -eq 0 ]; then
+            return 2
+        else
+            return 1
+        fi
+    fi
+
+    # Make sure /etc/pam.conf does not exist.
+    if [ -f /etc/pam.conf ]; then
+        echo "Authentication: Found a pam.conf file." >>$LOG
+        echo "Authentication: Running authentication_pam_conf fix." >>$LOG
+        authentication_pam_conf
+
+        if [ $? -eq 0 ]; then
+            return 2
+        else
+            return 1
+        fi
+    fi
+
+    # TODO: <pam> egrep returns 'ambiguous redirect'. Also, there are not 3 by default
+    # Make sure /etc/pam.d/passwd is configured correctly.
+    count=`egrep -v '^#|^$' /etc/pam.d/passwd 2>/dev/null |egrep 'system-auth$' 2>/dev/null |wc -l`
+
+    if [ $count -ne 3 ] || [ ! -f /etc/pam.d/passwd ]; then
+        echo "Authentication: Found a misconfigured or missing pam.d/passwd file." >>$LOG
+        echo "Authentication: Running authentication_pam_d_passwd fix." >>$LOG
+        authentication_pam_d_passwd
+
+        if [ $? -eq 0 ]; then
+            return 2
+        else
+            return 1
+        fi
+    fi
+
+    # TODO: no file `/etc/pam.d/system-auth-ac`. This will also break PAM settings.
+    # Make sure /etc/pam.d/system-auth-ac is configured correctly.  This next
+    # string looks ugly, I know...
+    local correct="auth        required      pam_env.so
+auth        sufficient    pam_unix.so nullok try_first_pass
+auth        requisite     pam_succeed_if.so uid >= 500 quiet
+auth        required      pam_deny.so
+account     required      pam_unix.so
+account     sufficient    pam_localuser.so
+account     sufficient    pam_succeed_if.so uid < 500 quiet
+account     required      pam_permit.so
+password    requisite     pam_cracklib.so try_first_pass retry=3 minlen=6 difok=3
+password    sufficient    pam_unix.so md5 shadow nullok try_first_pass use_authtok remember=3
+password    required      pam_deny.so
+session     optional      pam_keyinit.so revoke
+session     required      pam_limits.so
+session     [success=1 default=ignore] pam_succeed_if.so service in crond quiet use_uid
+session     required      pam_unix.so"
+    local output=`egrep -v '^#|^$' /etc/pam.d/system-auth-ac 2>/dev/null`
+
+    if [ "$output" != "$correct" ]; then
+        echo "Authentication: Found a misconfigured or missing pam.d/system-auth-ac file." >>$LOG
+        echo "Authentication: Running authentication_pam_d_system_auth_ac fix." >>$LOG
+        authentication_pam_d_system_auth_ac
+
+        if [ $? -eq 0 ]; then
+            return 2
+        else
+            return 1
+        fi
+    fi
+
+    # Make sure none of the /etc/passwd entries have '::' for the encrypted
+    # password field.  This handles NIS compat settings.
+    if egrep '^[a-zA-Z0-9]{1,}[-a-zA-Z0-9]{1,}::' /etc/passwd &>/dev/null; then
+        echo "Authentication: Found unencrypted /etc/passwd entry." >>$LOG
+        echo "Authentication: Running authentication_passwd fix." >>$LOG
+        authentication_passwd
+
+        if [ $? -eq 0 ]; then
+            return 2
+        else
+            return 1
+        fi
+    fi
+
+    # TODO: <pam> No `/etc/shadow` file in BSD
+    # Make sure none of the /etc/shadow entries have '::' for the encrypted
+    # password field.  This handles NIS compat settings.
+    if egrep '^[a-zA-Z0-9]{1,}[-a-zA-Z0-9]{1,}::' /etc/shadow &>/dev/null; then
+        echo "Authentication: Found unencrypted /etc/shadow entry." >>$LOG
+        echo "Authentication: Running authentication_shadow fix." >>$LOG
+        authentication_shadow
+
+        if [ $? -eq 0 ]; then
+            return 2
+        else
+            return 1
+        fi
+    fi
+
+    # TODO: <pam> No `/etc/shadow` file in BSD
+    # Make sure all users in /etc/passwd are also in /etc/shadow.  This
+    # handles NIS compat settings.
+    local users_passwd=`cut -d : -f 1 /etc/passwd |egrep -v '^[+-]' |sort`
+    local users_shadow=`cut -d : -f 1 /etc/shadow |egrep -v '^[+-]' |sort`
+
+    if [ "$users_passwd" != "$users_shadow" ]; then
+        echo "Authentication: Users in /etc/passwd do not match users in /etc/shadow." >>$LOG
+        return 1
+    fi
+
+    return 0
+}
+
+days_left() {
+    if [ $SERVER -eq 0 ]; then
+        local now=`date +%s`
+        local time=`head -1 $ROOT/critical-time`
+        echo $(((time - now) / 60 / 60 / 24))
+    else
+        echo
+    fi
+}
+
+set_critical() {
+    if [ $SERVER -eq 0 ]; then
+        if [ ! -f $ROOT/critical-time ]; then
+            date --date='+7 day' +%s >$ROOT/critical-time
+        fi
+    fi
+}
+
+remove_critical() {
+    if [ $SERVER -eq 0 ]; then
+        rm -f $ROOT/critical-time
+    fi
+}
+
+notify() {
+    local days
+    local crit_mesg
+
+    if [ $SERVER -eq 0 ]; then
+        days=`days_left`
+        crit_mesg="The system will be shutdown in $days days if this is not fixed."
+        cat >>/etc/bashrc <<EOF
+echo -e "MCSS:  The MCSS script check failed.\n\nCheck $LOG.\n\nOnce investigated, remove this message by deleting the this echo line from\n/etc/bashrc (should be near the end).\n\n$crit_mesg\n"
+EOF
+
+        cat <<EOF >/tmp/notify-message.$$
+The MCSS script check failed.
+
+Check $LOG.
+
+Once investigated, remove this message by deleting the this echo line from
+/etc/bashrc (should be near the end).
+
+$crit_mesg
+
+EOF
+
+        wall </tmp/notify-message.$$
+        rm -f /tmp/notify-message.$$
+    fi
+}
+
+remove_notify() {
+    if [ $SERVER -eq 0 ]; then
+        egrep -v '^echo -e "MCSS:' /etc/bashrc >/tmp/bashrc.$$ 2>/dev/null
+        mv /tmp/bashrc.$$ /etc/bashrc
+        chmod 644 /etc/bashrc
+    fi
+}
+
+attempt_shutdown() {
+    if [ $SERVER -eq 0 ]; then
+        local now=`date +%s`
+        local time=`head -1 $ROOT/critical-time`
+
+        if [ $now -ge $time ]; then
+            /sbin/shutdown -h +15 "MCSS failure timeout shutdown."
+        fi
+    fi
+}
+
+usage() {
+    cat <<EOF
+
+mcss [OPTION]
+
+    Options:
+
+        -i          Run in interactive mode (display output to terminal).
+        -h          Display this help message.
+
+EOF
+}
+
+
+#####
+#
+# Main section.  The basic process here is:
+#
+# - perform MCSS check
+#     - MCSS check function handles error cases on its own if possible:
+#         - return 0 if pass
+#         - return 1 if fail and could not recover
+#         - return 2 if fail and main body should recheck after recovery
+#
+#####
+
+interactive=0
+status=0
+
+if [ $# -gt 1 ]; then
+    usage
+    exit 0
+elif [ "$1" = "-i" ]; then
+    LOG=/dev/fd/1
+    interactive=1
+elif [ -n "$1" ]; then
+    usage
+    exit 0
+fi
+
+DATE=`date`
+echo "MCSS Check: $DATE" >>$LOG
+
+# Firewall
+check_firewall
+ret=$?
+
+while [ $ret -eq 2 ]; do
+    check_firewall
+    ret=$?
+done
+
+if [ $ret -eq 0 ]; then
+    echo "Firewall: pass" >>$LOG
+elif [ $ret -eq 1 ]; then
+    echo "Firewall: fail" >>$LOG
+    status=1
+else
+    echo "Firewall: unknown" >>$LOG
+    status=1
+fi
+
+# Current OS/Software
+check_software
+ret=$?
+
+while [ $ret -eq 2 ]; do
+    check_software
+    ret=$?
+done
+
+if [ $ret -eq 0 ]; then
+    echo "Software: pass" >>$LOG
+elif [ $ret -eq 1 ]; then
+    echo "Software: fail" >>$LOG
+    status=1
+else
+    echo "Software: unknown" >>$LOG
+    status=1
+fi
+
+# Anti-malware
+check_malware
+ret=$?
+
+while [ $ret -eq 2 ]; do
+    check_malware
+    ret=$?
+done
+
+if [ $ret -eq 0 ]; then
+    echo "Malware: pass" >>$LOG
+elif [ $ret -eq 1 ]; then
+    echo "Malware: fail" >>$LOG
+    status=1
+else
+    echo "Malware: unknown" >>$LOG
+    status=1
+fi
+
+# Authentication Controls
+check_authentication
+ret=$?
+
+while [ $ret -eq 2 ]; do
+    check_authentication
+    ret=$?
+done
+
+if [ $ret -eq 0 ]; then
+    echo "Authentication: pass" >>$LOG
+elif [ $ret -eq 1 ]; then
+    echo "Authentication: fail" >>$LOG
+    status=1
+else
+    echo "Authentication: unknown" >>$LOG
+    status=1
+fi
+
+echo >>$LOG
+
+if [ $interactive -eq 0 ]; then
+    if [ $status -eq 1 ]; then
+        set_critical
+        remove_notify
+        notify
+        attempt_shutdown
+    elif [ $status -eq 0 ]; then
+        remove_critical
+        remove_notify
+    fi
+fi
+
+exit $status
+

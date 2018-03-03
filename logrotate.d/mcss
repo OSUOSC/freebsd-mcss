@@ -1,0 +1,13 @@
+/var/log/mcss.log {
+    missingok
+    rotate 4
+    compress
+    weekly
+}
+
+/var/log/anti-malware.log {
+    missingok
+    rotate 4
+    compress
+    weekly
+}
