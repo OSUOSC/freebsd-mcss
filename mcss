@@ -58,21 +58,12 @@ firewall_default() {
     # or a totally open firewall rules definition for such a package.  There
     # needs to be some firewall rules enabled.  These are fallback defaults.
     if [ -z "$FIREWALL_DEFAULT" ]; then
-        FIREWALL_DEFAULT=1
-        /sbin/iptables -F
-        /sbin/iptables -X
-        /sbin/iptables -Z
-        /sbin/iptables -P INPUT ACCEPT
-        /sbin/iptables -P FORWARD ACCEPT
-        /sbin/iptables -P OUTPUT ACCEPT
-        /sbin/iptables -N Firewall-1-INPUT
-        /sbin/iptables -A INPUT -j Firewall-1-INPUT
-        /sbin/iptables -A FORWARD -j Firewall-1-INPUT
-        /sbin/iptables -A Firewall-1-INPUT -i lo -j ACCEPT
-        /sbin/iptables -A Firewall-1-INPUT -p icmp --icmp-type any -j ACCEPT
-        /sbin/iptables -A Firewall-1-INPUT -p tcp --dport 22 -j ACCEPT
-        /sbin/iptables -A Firewall-1-INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-        /sbin/iptables -A Firewall-1-INPUT -j REJECT --reject-with icmp-host-prohibited
+        if [ -f /etc/pf.conf ]; then
+            mv /etc/pf.conf /etc/pf.conf.bak
+        fi
+        cp $ROOT/pf/pf.conf /etc/pf.conf
+        pfctl -nf /etc/pf.conf
+        /usr/sbin/service pf restart
         return 0
     else
         echo "Firewall: firewall_default was already tried." >>$LOG
@@ -80,12 +71,12 @@ firewall_default() {
     fi
 }
 
-# TODO: <firewall> Check for firewall enabled and configured correctly
 check_firewall() {
-    local count=`/sbin/iptables -L -n |egrep -v '^Chain|^target|$^' |wc -l`
+    # Check for rules, not comments!
+    local count=`pfctl -s rules | grep -v "^#" | wc -l | xargs`
 
     if [ $count -eq 0 ]; then
-        echo "Firewall: There are no iptables rules defined." >>$LOG
+        echo "Firewall: There are no pf rules defined." >>$LOG
         echo "Firewall: Running firewall_default fix." >>$LOG
         firewall_default
 
@@ -99,16 +90,15 @@ check_firewall() {
     return 0
 }
 
-# TODO: <pkg> Check for updates. We don't want to force an update if the return
-# is prompting for a major upgrade, but individual packages _should_ be
-# upgraded ASAP
 check_software() {
-    yum check-update &>/tmp/check-update.$$
-    local ret=$?
-    local num=`egrep 'updates|fedora' /tmp/check-update.$$ |wc -l`
+    # https://www.freebsd.org/doc/handbook/updating-upgrading-freebsdupdate.html
+    # The default configuration file for freebsd-update works as-is.
+    freebsd-update fetch > /tmp/check-update.$$
+    local raw_num=`sed -n -e '/following files will be updated/,$p' /tmp/check-update.$$ | wc -l`
+    local num=`echo " $raw_num - 1" | bc`
     rm -f /tmp/check-update.$$
 
-    if [ $ret -eq 100 ]; then
+    if [ $num -gt 0 ]; then
         echo "Software: Software is not up-to-date:" >>$LOG
         echo "Software: Number of update packages: $num" >>$LOG
         return 1
@@ -181,37 +171,24 @@ check_malware() {
         fi
     fi
 
-    # TODO: <clamav> Change rpm to pkg
-    for p in clamav clamav-update; do
-        rpm -q $p &>/dev/null
+    pkg -q clamav &>/dev/null
 
-        if [ $? -ne 0 ]; then
-            echo "Malware: ClamAV package $p not installed." >>$LOG
-            return 1
-        fi
-    done
+    if [ $? -ne 0 ]; then
+        echo "Malware: ClamAV package not installed." >>$LOG
+        return 1
+    fi
 
     return 0
 }
 
-# TODO: <users> disable password-less root login
 authentication_gdm() {
-    # Fix the gdm login configuration file so that it won't automatically login
-    # a user.
-    if [ -z "$AUTHENTICATION_GDM" ]; then
-        AUTHENTICATION_GDM=1
-        egrep -v '^AutomaticLoginEnable=true' /etc/gdm/custom.conf >/etc/gdm/custom.conf.$$
-        mv /etc/gdm/custom.conf.$$ /etc/gdm/custom.conf
-        chmod 644 /etc/gdm/custom.conf
-        return 0
-    else
-        echo "Authentication: authentication_gdm was already tried." >>$LOG
-        return 1
-    fi
+    # FreeBSD does not have gdm installed
+    :
+    return 0
 }
 
 authentication_pam_conf() {
-    # There should be no /etc/pam.conf file on Fedora systems.
+    # There should be no /etc/pam.conf file on BSD systems.
     if [ -z "$AUTHENTICATION_PAM_CONF" ];then
         AUTHENTICATION_PAM_CONF=1
         rm -f /etc/pam.conf
@@ -299,46 +276,17 @@ authentication_passwd() {
 }
 
 authentication_shadow() {
-    # Fix any unencrypted /etc/shadow account settings.  Here I am choosing
-    # the '!!' value.  If this breaks something, then don't mess with
-    # /etc/shadow by hand.  This handles NIS compat settings.
-    if [ -z "$AUTHENTICATION_SHADOW" ]; then
-        AUTHENTICATION_SHADOW=1
-        sed -i 's/^\([a-zA-Z0-9]\{1,\}[-a-zA-Z0-9]\{1,\}\)::/\1:!!:/' /etc/shadow 2>/dev/null
-
-        if [ $? -eq 0 ]; then
-            return 0
-        else
-            echo "Authentication: authentication_shadow failed." >>$LOG
-            return 1
-        fi
-    else
-        echo "Authentication: authentication_shadow was already tried." >>$LOG
-        return 1
-    fi
+    # BSD uses /etc/spwd.db instead of /etc/shadow
+    # https://www.freebsd.org/cgi/man.cgi?query=pwd_mkdb&sektion=&manpath=freebsd-release-ports
+    :
+    return 0
 }
 
 # TODO: <pam> Auth for BSD. Including LDAP/other auth systems might break this.
 check_authentication() {
-    # This is the most complicated check overall, but proper authentication
-    # controls should be enabled by default unless someone has been messing
-    # with the system to try and get around it.
-
-    # TODO: <pam> GDM does not exist on BSD - but this will not be run if
-    # `/etc/gdm/custom.conf` does not exist
     # Make sure the login screen is not configured to automatically login
     # any user.
-    if egrep '^AutomaticLoginEnable=true' /etc/gdm/custom.conf &>/dev/null; then
-        echo "Authentication: Found gdm automatic login setting." >>$LOG
-        echo "Authentication: Running authentication_gdm fix." >>$LOG
-        authentication_gdm
-
-        if [ $? -eq 0 ]; then
-            return 2
-        else
-            return 1
-        fi
-    fi
+    authentication_gdm
 
     # Make sure /etc/pam.conf does not exist.
     if [ -f /etc/pam.conf ]; then
@@ -355,7 +303,7 @@ check_authentication() {
 
     # TODO: <pam> egrep returns 'ambiguous redirect'. Also, there are not 3 by default
     # Make sure /etc/pam.d/passwd is configured correctly.
-    count=`egrep -v '^#|^$' /etc/pam.d/passwd 2>/dev/null |egrep 'system-auth$' 2>/dev/null |wc -l`
+    count=`egrep -v '^#|^$' /etc/pam.d/passwd 2>/dev/null |egrep 'system$' 2>/dev/null |wc -l`
 
     if [ $count -ne 3 ] || [ ! -f /etc/pam.d/passwd ]; then
         echo "Authentication: Found a misconfigured or missing pam.d/passwd file." >>$LOG
@@ -403,16 +351,12 @@ session     required      pam_unix.so"
 
     # Make sure none of the /etc/passwd entries have '::' for the encrypted
     # password field.  This handles NIS compat settings.
-    if egrep '^[a-zA-Z0-9]{1,}[-a-zA-Z0-9]{1,}::' /etc/passwd &>/dev/null; then
-        echo "Authentication: Found unencrypted /etc/passwd entry." >>$LOG
-        echo "Authentication: Running authentication_passwd fix." >>$LOG
-        authentication_passwd
+    authentication_passwd
 
-        if [ $? -eq 0 ]; then
-            return 2
-        else
-            return 1
-        fi
+    if [ $? -eq 0 ]; then
+        return 2
+    else
+        return 1
     fi
 
     # TODO: <pam> No `/etc/shadow` file in BSD
@@ -649,4 +593,3 @@ if [ $interactive -eq 0 ]; then
 fi
 
 exit $status
-

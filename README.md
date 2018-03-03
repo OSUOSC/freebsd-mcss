@@ -1,11 +1,14 @@
 # OS software installation
 
-In FreeBSD, the binary package manager is `pkg`. Otherwise, software can be compiled with the `ports` setup. Documentation about these two systems can be found online in the [FreeBSD Handbook](https://www.freebsd.org/doc/en_US.ISO8859-1/books/handbook/ports.html).
+In FreeBSD, the binary package manager is `pkg`. We will be using it since we need
+a convenient way to test if the installed OS is up-to-date.
 
 The following packages will need to be installed:
 
+- pkg (it has to install itself...)
 - logrotate
 - git
+- clamav
 
 # Setup
 
@@ -25,3 +28,11 @@ sudo /root/mcss/uninstall.sh
 
 Keep in mind the MCSS software is required in order to remain connected to
 the CSE network.  Report any errors to CSE computing staff.
+
+# Assumptions
+
+- We assume that `pf` will be used as the firewall.
+- We assume local authentication
+- We assume the SSH daemon is already set up and running.
+
+Any divergence from these assumptions will have to be OK'd by the dept who is currently running the network.
