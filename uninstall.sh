@@ -11,15 +11,13 @@ rm -rf $ROOT
 # Remove log file rotation.
 echo "Uninstalling MCSS logrotate.d configuration..."
 echo
-# TODO: <logrotate>
-rm -f /etc/logrotate.d/mcss
+rm -f /usr/local/etc/logrotate.d/mcss
 
 # Restore original authentication settings.
 echo "Restoring original passwd pam.d settings..."
 echo
-# TODO: <pam>
 mv /etc/pam.d/passwd.orig /etc/pam.d/passwd 2>/dev/null
-mv /etc/pam.d/system-auth-ac.orig /etc/pam.d/system-auth-ac 2>/dev/null
+mv /etc/pam.d/system.orig /etc/pam.d/system 2>/dev/null
 
 # Remove MCSS cron jobs.
 echo "Removing MCSS root crontab..."

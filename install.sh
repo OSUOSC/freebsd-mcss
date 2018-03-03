@@ -23,20 +23,20 @@ touch /var/log/mcss.log
 touch /var/log/anti-malware.log
 echo "Installing MCSS logrotate.d configuration..."
 echo
-### TODO: <logrotate> Where should this go
-cp logrotate.d/mcss /etc/logrotate.d
-chmod 644 /etc/logrotate.d/mcss
+cp logrotate.d/mcss /usr/local/etc/logrotate.d
+chmod 644 /usr/local/etc/logrotate.d/mcss
 
 # Setup proper authentication settings.
+# https://www.freebsd.org/doc/en_US.ISO8859-1/articles/pam/
 echo "Installing passwd pam.d settings..."
 echo
-### TODO: <pam> Does PAM work the same on FreeBSD as Fedora?
 cp /etc/pam.d/passwd /etc/pam.d/passwd.orig
-cp /etc/pam.d/system-auth-ac /etc/pam.d/system-auth-ac.orig
+cp /etc/pam.d/system /etc/pam.d/system.orig
 cp pam.d/passwd /etc/pam.d
 chmod 644 /etc/pam.d/passwd
-cp pam.d/system-auth-ac /etc/pam.d
-chmod 644 /etc/pam.d/system-auth-ac
+cp pam.d/system /etc/pam.d
+chmod 644 /etc/pam.d/system
+# This is for password expiry. This file keeps the last n passwords from the users' password changes
 touch /etc/security/opasswd
 chmod 600 /etc/security/opasswd
 
@@ -52,7 +52,7 @@ cat crontab/root >>crontab/root.new
 # minute value for the hourly cron job's minute setting.  The 15 minute
 # bump is so it won't run immedately after installed in case the user
 # is running it interactively right away to test.
-MIN=`date --date='+15 minute' +%M`
+MIN=`date -v +15M +%M`
 sed -i "s/MIN/$MIN/" crontab/root.new
 crontab -u root crontab/root.new
 rm crontab/root.orig crontab/root.new
