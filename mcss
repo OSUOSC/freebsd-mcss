@@ -131,7 +131,7 @@ MAILTO=root,localhost
 
 ## It is ok to execute it as root; freshclam drops privileges and becomes
 ## user 'clamav' as soon as possible
-0  */3 * * * root /usr/share/clamav/freshclam-sleep
+0  */3 * * * root /usr/local/bin/freshclam
 EOF
 
         chmod 600 /etc/cron.d/clamav-update
@@ -157,7 +157,7 @@ check_malware() {
     fi
 
     # Check that automatic updates are enabled.
-    if [ ! -f /etc/cron.d/clamav-update ] || ! egrep '^0  \*/3 \* \* \* root /usr/share/clamav/freshclam-sleep$' /etc/cron.d/clamav-update &>/dev/null; then
+    if [ ! -f /etc/cron.d/clamav-update ] || ! egrep '^0  \*/3 \* \* \* root /usr/local/bin/freshclam$' /etc/cron.d/clamav-update &>/dev/null; then
         echo "Malware: Freshclam updates not enabled or misconfigured." >>$LOG
         echo "Malware: Running malware_updates fix." >>$LOG
         malware_updates

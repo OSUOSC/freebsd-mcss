@@ -53,7 +53,7 @@ cat crontab/root >>crontab/root.new
 # bump is so it won't run immedately after installed in case the user
 # is running it interactively right away to test.
 MIN=`date -v +15M +%M`
-sed -i "s/MIN/$MIN/" crontab/root.new
+sed -i.bak "s/MIN/$MIN/" crontab/root.new
 crontab -u root crontab/root.new
 rm crontab/root.orig crontab/root.new
 echo "Crontab"
