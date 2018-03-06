@@ -50,7 +50,6 @@ LOG=/var/log/mcss.log
 #
 #####
 
-# TODO: <firewall> Set up default rules
 firewall_default() {
     # These are default firewall rules to load in the event the firewall
     # rules are missing when the check is done.  This way we can avoid
@@ -122,14 +121,13 @@ malware_schedule() {
     fi
 }
 
-# TODO: Adjust $MAILTO line
 malware_updates() {
     # Make sure freshclam updates are enabled.
     if [ -z "$MALWARE_UPDATES" ]; then
         MALWARE_UPDATES=1
         cat <<EOF >/etc/cron.d/clamav-update
 ## Adjust this line...
-MAILTO=root,postmaster,webmaster,clamav
+MAILTO=root,localhost
 
 ## It is ok to execute it as root; freshclam drops privileges and becomes
 ## user 'clamav' as soon as possible
@@ -199,18 +197,11 @@ authentication_pam_conf() {
     fi
 }
 
-# TODO: <pam> Make sure this doesn't fuck things up
 authentication_pam_d_passwd() {
     # Set /etc/pam.d/passwd to its default secure settings.
     if [ -z "$AUTHENTICATION_PAM_D_PASSWD" ]; then
         AUTHENTICATION_PAM_D_PASSWD=1
-        cat <<EOF >/etc/pam.d/passwd
-#%PAM-1.0
-auth       include      system-auth
-account    include      system-auth
-password   include      system-auth
-EOF
-
+        cp $ROOT/pam.d/passwd /etc/pam.d/passwd
         chmod 644 /etc/pam.d/passwd
         return 0
     else
@@ -219,36 +210,12 @@ EOF
     fi
 }
 
-# TODO: <pam> Make sure this doesn't fuck things up
-authentication_pam_d_system_auth_ac() {
+authentication_pam_d_system() {
     # Set /etc/pam.d/system-auth-ac to its default secure settings.
     if [ -z "$AUTHENTICATION_PAM_D_SYSTEM_AUTH_AC" ]; then
         AUTHENTICATION_PAM_D_SYSTEM_AUTH_AC=1
-        cat <<EOF >/etc/pam.d/system-auth-ac
-#%PAM-1.0
-# This file is auto-generated.
-# User changes will be destroyed the next time authconfig is run.
-auth        required      pam_env.so
-auth        sufficient    pam_unix.so nullok try_first_pass
-auth        requisite     pam_succeed_if.so uid >= 500 quiet
-auth        required      pam_deny.so
-
-account     required      pam_unix.so
-account     sufficient    pam_localuser.so
-account     sufficient    pam_succeed_if.so uid < 500 quiet
-account     required      pam_permit.so
-
-password    requisite     pam_cracklib.so try_first_pass retry=3 minlen=6 difok=3
-password    sufficient    pam_unix.so md5 shadow nullok try_first_pass use_authtok remember=3
-password    required      pam_deny.so
-
-session     optional      pam_keyinit.so revoke
-session     required      pam_limits.so
-session     [success=1 default=ignore] pam_succeed_if.so service in crond quiet use_uid
-session     required      pam_unix.so
-EOF
-
-        chmod 644 /etc/pam.d/system-auth-ac
+        cp $ROOT/pam.d/system /etc/pam.d/system
+        chmod 644 /etc/pam.d/system
         return 0
     else
         echo "Authentication: authentication_pam_d_system_auth_ac was already tried." >>$LOG
@@ -282,7 +249,6 @@ authentication_shadow() {
     return 0
 }
 
-# TODO: <pam> Auth for BSD. Including LDAP/other auth systems might break this.
 check_authentication() {
     # Make sure the login screen is not configured to automatically login
     # any user.
@@ -301,11 +267,10 @@ check_authentication() {
         fi
     fi
 
-    # TODO: <pam> egrep returns 'ambiguous redirect'. Also, there are not 3 by default
-    # Make sure /etc/pam.d/passwd is configured correctly.
-    count=`egrep -v '^#|^$' /etc/pam.d/passwd 2>/dev/null |egrep 'system$' 2>/dev/null |wc -l`
+    # Make sure /etc/pam.d/passwd is configured correctly. We check here for at least one password facility.
+    count=`grep -v '^#\|^$' /etc/pam.d/passwd 2>/dev/null | grep '^password' 2>/dev/null | wc -l`
 
-    if [ $count -ne 3 ] || [ ! -f /etc/pam.d/passwd ]; then
+    if [ "${count}" -eq 0 ]; then
         echo "Authentication: Found a misconfigured or missing pam.d/passwd file." >>$LOG
         echo "Authentication: Running authentication_pam_d_passwd fix." >>$LOG
         authentication_pam_d_passwd
@@ -317,30 +282,20 @@ check_authentication() {
         fi
     fi
 
-    # TODO: no file `/etc/pam.d/system-auth-ac`. This will also break PAM settings.
-    # Make sure /etc/pam.d/system-auth-ac is configured correctly.  This next
-    # string looks ugly, I know...
-    local correct="auth        required      pam_env.so
-auth        sufficient    pam_unix.so nullok try_first_pass
-auth        requisite     pam_succeed_if.so uid >= 500 quiet
-auth        required      pam_deny.so
-account     required      pam_unix.so
-account     sufficient    pam_localuser.so
-account     sufficient    pam_succeed_if.so uid < 500 quiet
-account     required      pam_permit.so
-password    requisite     pam_cracklib.so try_first_pass retry=3 minlen=6 difok=3
-password    sufficient    pam_unix.so md5 shadow nullok try_first_pass use_authtok remember=3
-password    required      pam_deny.so
-session     optional      pam_keyinit.so revoke
-session     required      pam_limits.so
-session     [success=1 default=ignore] pam_succeed_if.so service in crond quiet use_uid
-session     required      pam_unix.so"
-    local output=`egrep -v '^#|^$' /etc/pam.d/system-auth-ac 2>/dev/null`
+    # Make sure /etc/pam.d/system-auth-ac is configured correctly. Make sure it has at least one of each facility.
+    #   - auth
+    #   - password
+    #   - account
+    #   - session
+    local auth_count=`grep -v '^#\|^$' /etc/pam.d/system 2>/dev/null | grep '^auth' 2>/dev/null | wc -l`
+    local password_count=`grep -v '^#\|^$' /etc/pam.d/system 2>/dev/null | grep '^password' 2>/dev/null | wc -l`
+    local account_count=`grep -v '^#\|^$' /etc/pam.d/system 2>/dev/null | grep '^account' 2>/dev/null | wc -l`
+    local session_count=`grep -v '^#\|^$' /etc/pam.d/system 2>/dev/null | grep '^session' 2>/dev/null | wc -l`
 
-    if [ "$output" != "$correct" ]; then
+    if [ "${auth_count}" -eq 0 ] || [ "${password_count}" -eq 0 ] || [ "${account_count}" -eq 0 ] || [ "${session_count}" -eq 0 ]; then
         echo "Authentication: Found a misconfigured or missing pam.d/system-auth-ac file." >>$LOG
         echo "Authentication: Running authentication_pam_d_system_auth_ac fix." >>$LOG
-        authentication_pam_d_system_auth_ac
+        authentication_pam_d_system
 
         if [ $? -eq 0 ]; then
             return 2
@@ -359,29 +314,13 @@ session     required      pam_unix.so"
         return 1
     fi
 
-    # TODO: <pam> No `/etc/shadow` file in BSD
     # Make sure none of the /etc/shadow entries have '::' for the encrypted
     # password field.  This handles NIS compat settings.
-    if egrep '^[a-zA-Z0-9]{1,}[-a-zA-Z0-9]{1,}::' /etc/shadow &>/dev/null; then
-        echo "Authentication: Found unencrypted /etc/shadow entry." >>$LOG
-        echo "Authentication: Running authentication_shadow fix." >>$LOG
-        authentication_shadow
+    authentication_shadow
 
-        if [ $? -eq 0 ]; then
-            return 2
-        else
-            return 1
-        fi
-    fi
-
-    # TODO: <pam> No `/etc/shadow` file in BSD
-    # Make sure all users in /etc/passwd are also in /etc/shadow.  This
-    # handles NIS compat settings.
-    local users_passwd=`cut -d : -f 1 /etc/passwd |egrep -v '^[+-]' |sort`
-    local users_shadow=`cut -d : -f 1 /etc/shadow |egrep -v '^[+-]' |sort`
-
-    if [ "$users_passwd" != "$users_shadow" ]; then
-        echo "Authentication: Users in /etc/passwd do not match users in /etc/shadow." >>$LOG
+    if [ $? -eq 0 ]; then
+        return 2
+    else
         return 1
     fi
 
