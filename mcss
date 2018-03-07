@@ -305,12 +305,12 @@ check_authentication() {
     # Make sure none of the /etc/passwd entries have '::' for the encrypted
     # password field.  This handles NIS compat settings.
     # authentication_passwd
-
-    if [ $? -eq 0 ]; then
-        return 2
-    else
-        return 1
-    fi
+    #
+    #if [ $? -eq 0 ]; then
+    #    return 2
+    #else
+    #    return 1
+    #fi
 
     # Make sure none of the /etc/shadow entries have '::' for the encrypted
     # password field.  This handles NIS compat settings.
