@@ -157,7 +157,7 @@ check_malware() {
     fi
 
     # Check that automatic updates are enabled.
-    if [ ! -f /etc/cron.d/clamav-update ] || ! egrep '^0  \*/3 \* \* \* root /usr/local/bin/freshclam$' /etc/cron.d/clamav-update &>/dev/null; then
+    if [ ! -f /etc/cron.d/clamav-update ] || ! grep '^0  \*/3 \* \* \* root /usr/local/bin/freshclam$' /etc/cron.d/clamav-update &>/dev/null; then
         echo "Malware: Freshclam updates not enabled or misconfigured." >>$LOG
         echo "Malware: Running malware_updates fix." >>$LOG
         malware_updates
@@ -169,7 +169,7 @@ check_malware() {
         fi
     fi
 
-    pkg -q clamav &>/dev/null
+    pkg info clamav &>/dev/null
 
     if [ $? -ne 0 ]; then
         echo "Malware: ClamAV package not installed." >>$LOG
@@ -181,7 +181,6 @@ check_malware() {
 
 authentication_gdm() {
     # FreeBSD does not have gdm installed
-    :
     return 0
 }
 
@@ -228,7 +227,7 @@ authentication_passwd() {
     # compat settings.
     if [ -z "$AUTHENTICATION_PASSWD" ]; then
         AUTHENTICATION_PASSWD=1
-        sed -i 's/^\([a-zA-Z0-9]\{1,\}[-a-zA-Z0-9]\{1,\}\)::/\1:x:/' /etc/passwd 2>/dev/null
+        sed -i.bak 's/^\([a-zA-Z0-9]\{1,\}[-a-zA-Z0-9]\{1,\}\):\*:/\1:x:/' /etc/passwd 2>/dev/null
 
         if [ $? -eq 0 ]; then
             return 0
@@ -245,7 +244,6 @@ authentication_passwd() {
 authentication_shadow() {
     # BSD uses /etc/spwd.db instead of /etc/shadow
     # https://www.freebsd.org/cgi/man.cgi?query=pwd_mkdb&sektion=&manpath=freebsd-release-ports
-    :
     return 0
 }
 
@@ -268,7 +266,7 @@ check_authentication() {
     fi
 
     # Make sure /etc/pam.d/passwd is configured correctly. We check here for at least one password facility.
-    count=`grep -v '^#\|^$' /etc/pam.d/passwd 2>/dev/null | grep '^password' 2>/dev/null | wc -l`
+    count=`grep -v '^#\|^$' /etc/pam.d/passwd | grep '^password' | wc -l`
 
     if [ "${count}" -eq 0 ]; then
         echo "Authentication: Found a misconfigured or missing pam.d/passwd file." >>$LOG
@@ -306,7 +304,7 @@ check_authentication() {
 
     # Make sure none of the /etc/passwd entries have '::' for the encrypted
     # password field.  This handles NIS compat settings.
-    authentication_passwd
+    # authentication_passwd
 
     if [ $? -eq 0 ]; then
         return 2
