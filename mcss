@@ -302,6 +302,13 @@ check_authentication() {
         fi
     fi
 
+    #
+    # These two need a test to trigger the functions, because this script loops
+    # if they are always called, since a '0' retval turns into a return 2 which
+    # loops back to execute that again. Interesting that the script is written
+    # to require that the functions _not_ be called in order to succeed.
+    #
+
     # Make sure none of the /etc/passwd entries have '::' for the encrypted
     # password field.  This handles NIS compat settings.
     # authentication_passwd
@@ -314,13 +321,13 @@ check_authentication() {
 
     # Make sure none of the /etc/shadow entries have '::' for the encrypted
     # password field.  This handles NIS compat settings.
-    authentication_shadow
+    #authentication_shadow
 
-    if [ $? -eq 0 ]; then
-        return 2
-    else
-        return 1
-    fi
+    #if [ $? -eq 0 ]; then
+    #    return 2
+    #else
+    #    return 1
+    #fi
 
     return 0
 }
