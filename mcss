@@ -98,6 +98,7 @@ check_software() {
     elif command -v pfSense-upgrade; then
         pfSense-upgrade -n > /tmp/check-update.$$
         local raw_num=`grep 'Number of packages to be upgraded:' /tmp/check-update.$$ | cut -d ':' -f 2 | xargs`
+    fi
     local num=`echo " $raw_num - 1" | bc`
     rm -f /tmp/check-update.$$
 
