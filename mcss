@@ -92,10 +92,10 @@ check_firewall() {
 check_software() {
     # https://www.freebsd.org/doc/handbook/updating-upgrading-freebsdupdate.html
     # The default configuration file for freebsd-update works as-is.
-    if command -v freebsd-update; then
+    if command -v freebsd-update &>/dev/null; then
         freebsd-update fetch > /tmp/check-update.$$
         local raw_num=`sed -n -e '/following files will be updated/,$p' /tmp/check-update.$$ | wc -l`
-    elif command -v pfSense-upgrade; then
+    elif command -v pfSense-upgrade &>/dev/null; then
         pfSense-upgrade -n > /tmp/check-update.$$
         local raw_num=`grep 'Number of packages to be upgraded:' /tmp/check-update.$$ | cut -d ':' -f 2 | xargs`
     fi
@@ -371,7 +371,7 @@ days_left() {
 set_critical() {
     if [ $SERVER -eq 0 ]; then
         if [ ! -f $ROOT/critical-time ]; then
-            date --date='+7 day' +%s >$ROOT/critical-time
+            date -v+7d +%s >$ROOT/critical-time
         fi
     fi
 }
