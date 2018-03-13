@@ -179,11 +179,6 @@ check_malware() {
     return 0
 }
 
-authentication_gdm() {
-    # FreeBSD does not have gdm installed
-    return 0
-}
-
 authentication_pam_conf() {
     # There should be no /etc/pam.conf file on BSD systems.
     if [ -z "$AUTHENTICATION_PAM_CONF" ];then
@@ -227,7 +222,7 @@ authentication_passwd() {
     # compat settings.
     if [ -z "$AUTHENTICATION_PASSWD" ]; then
         AUTHENTICATION_PASSWD=1
-        sed -i.bak 's/^\([a-zA-Z0-9]\{1,\}[-a-zA-Z0-9]\{1,\}\):\*:/\1:x:/' /etc/passwd 2>/dev/null
+        sed -i.bak 's/^\([a-zA-Z0-9\_]\{1,\}[-a-zA-Z0-9\_]\{1,\}\):\*:/\1:x:/' /etc/passwd 2>/dev/null
 
         if [ $? -eq 0 ]; then
             return 0
@@ -241,10 +236,28 @@ authentication_passwd() {
     fi
 }
 
-authentication_shadow() {
-    # BSD uses /etc/spwd.db instead of /etc/shadow
-    # https://www.freebsd.org/cgi/man.cgi?query=pwd_mkdb&sektion=&manpath=freebsd-release-ports
-    return 0
+authentication_master() {
+    # Fix any unencrypted /etc/master.passwd account settings.  Here I am choosing
+    # the '!!' value.  If this breaks something, then don't mess with
+    # /etc/master.passwd by hand (using `vipw`.  This handles NIS compat settings.
+    #
+    # Keep in mind that any account without a password will have '*' specified, and
+    # any encrypted password would start with a `$`.
+    if [ -z "$AUTHENTICATION_MASTER" ]; then
+	AUTHENTICATION_MASTER=1
+	sed -i 's/^\([a-zA-Z0-9]\{1,\}[-a-zA-Z0-9]\{1,\}\)::/\1:!!:/' /etc/master.passwd 2>/dev/null
+
+	if [ $? -eq 0 ]; then
+	    return 0
+	else
+	    echo "Authentication: authentication_master failed." >>$LOG
+	    return 1
+	fi
+    else
+	echo "Authentication: authentication_master was already tried." >>$LOG
+	return 1
+    fi
+}
 }
 
 check_authentication() {
@@ -311,23 +324,35 @@ check_authentication() {
 
     # Make sure none of the /etc/passwd entries have '::' for the encrypted
     # password field.  This handles NIS compat settings.
-    # authentication_passwd
-    #
-    #if [ $? -eq 0 ]; then
-    #    return 2
-    #else
-    #    return 1
-    #fi
-
-    # Make sure none of the /etc/shadow entries have '::' for the encrypted
+        # Make sure none of the /etc/passwd entries have '::' for the encrypted
     # password field.  This handles NIS compat settings.
-    #authentication_shadow
+    if grep '^[a-zA-Z0-9]{1,}[-a-zA-Z0-9]{1,}::' /etc/passwd &>/dev/null; then
+        echo "Authentication: Found unencrypted /etc/passwd entry." >>$LOG
+        echo "Authentication: Running authentication_passwd fix." >>$LOG
+        authentication_passwd
 
-    #if [ $? -eq 0 ]; then
-    #    return 2
-    #else
-    #    return 1
-    #fi
+        if [ $? -eq 0 ]; then
+            return 2
+        else
+            return 1
+        fi
+    fi
+
+    # Make sure none of the /etc/master.passwd entries have '::' for the encrypted
+    # password field.  This handles NIS compat settings.
+        # Make sure none of the /etc/shadow entries have '::' for the encrypted
+    # password field.  This handles NIS compat settings.
+    if grep '^[a-zA-Z0-9]{1,}[-a-zA-Z0-9]{1,}::' /etc/shadow &>/dev/null; then
+        echo "Authentication: Found unencrypted /etc/shadow entry." >>$LOG
+        echo "Authentication: Running authentication_shadow fix." >>$LOG
+        authentication_master
+
+        if [ $? -eq 0 ]; then
+            return 2
+        else
+            return 1
+        fi
+    fi
 
     return 0
 }
