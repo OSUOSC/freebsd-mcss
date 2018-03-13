@@ -92,8 +92,12 @@ check_firewall() {
 check_software() {
     # https://www.freebsd.org/doc/handbook/updating-upgrading-freebsdupdate.html
     # The default configuration file for freebsd-update works as-is.
-    freebsd-update fetch > /tmp/check-update.$$
-    local raw_num=`sed -n -e '/following files will be updated/,$p' /tmp/check-update.$$ | wc -l`
+    if command -v freebsd-update; then
+        freebsd-update fetch > /tmp/check-update.$$
+        local raw_num=`sed -n -e '/following files will be updated/,$p' /tmp/check-update.$$ | wc -l`
+    elif command -v pfSense-upgrade; then
+        pfSense-upgrade -n > /tmp/check-update.$$
+        local raw_num=`grep 'Number of packages to be upgraded:' /tmp/check-update.$$ | cut -d ':' -f 2 | xargs`
     local num=`echo " $raw_num - 1" | bc`
     rm -f /tmp/check-update.$$
 
@@ -258,12 +262,8 @@ authentication_master() {
 	return 1
     fi
 }
-}
 
 check_authentication() {
-    # Make sure the login screen is not configured to automatically login
-    # any user.
-    authentication_gdm
 
     # Make sure /etc/pam.conf does not exist.
     if [ -f /etc/pam.conf ]; then

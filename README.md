@@ -9,20 +9,27 @@ The following packages will need to be installed:
 - logrotate
 - git
 - clamav
+- bash
 
 # Setup
+
+First, tell BSD where to find the bash interpreter:
+
+```bash
+ln -s /usr/local/bin/bash /bin/bash
+```
 
 Run the install.sh script from this directory to install the MCSS software:
 
 If the computer the software is being installed on is a server, pass the `-s` flag at the end.
 
-```
+```bash
 sudo ./install.sh [-s]
 ```
 
 This installs in /root/mcss.  The MCSS software can be removed with:
 
-```
+```bash
 sudo /root/mcss/uninstall.sh
 ```
 
